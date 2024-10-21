@@ -4,7 +4,7 @@ import re
 import sys
 
 try:
-    import ConfigParser as configparser
+    import configparser  # Use configparser directly
 except ImportError:
     import configparser
 
@@ -15,18 +15,14 @@ from . import __version__
 from .uinput import parse_uinput_mapping
 from .utils import parse_button_combo
 
-
 CONFIG_FILES = ("~/.config/ds4drv.conf", "/etc/ds4drv.conf")
 DAEMON_LOG_FILE = "~/.cache/ds4drv.log"
 DAEMON_PID_FILE = "/tmp/ds4drv.pid"
 
-
 class SortingHelpFormatter(argparse.HelpFormatter):
     def add_argument(self, action):
-        # Force the built in options to be capitalized
         if action.option_strings[-1] in ("--version", "--help"):
             action.help = action.help.capitalize()
-
         super(SortingHelpFormatter, self).add_argument(action)
         self.add_text("")
 
@@ -37,7 +33,6 @@ class SortingHelpFormatter(argparse.HelpFormatter):
     def add_arguments(self, actions):
         actions = sorted(actions, key=attrgetter("option_strings"))
         super(SortingHelpFormatter, self).add_arguments(actions)
-
 
 parser = argparse.ArgumentParser(prog="ds4drv",
                                  formatter_class=SortingHelpFormatter)
@@ -69,13 +64,12 @@ daemonopt.add_argument("--daemon-pid", default=DAEMON_PID_FILE, metavar="file",
 controllopt = parser.add_argument_group("controller options")
 
 
-class Config(configparser.SafeConfigParser):
+class Config(configparser.ConfigParser):  # Use ConfigParser instead of SafeConfigParser
     def load(self, filename):
         self.read([filename])
 
     def section_to_args(self, section):
         args = []
-
         for key, value in self.section(section).items():
             if value.lower() == "true":
                 args.append("--{0}".format(key))
@@ -83,20 +77,17 @@ class Config(configparser.SafeConfigParser):
                 pass
             else:
                 args.append("--{0}={1}".format(key, value))
-
         return args
 
     def section(self, section, key_type=str, value_type=str):
         try:
-            # Removes empty values and applies types
             return dict(map(lambda kv: (key_type(kv[0]), value_type(kv[1])),
-                            filter(lambda i: bool(i[1]),
-                                   self.items(section))))
+                            filter(lambda i: bool(i[1]), self.items(section))))
         except configparser.NoSectionError:
             return {}
 
     def sections(self, prefix=None):
-        for section in configparser.SafeConfigParser.sections(self):
+        for section in super().sections():  # Use super() to access parent class method
             match = re.match(r"{0}:(.+)".format(prefix), section)
             if match:
                 yield match.group(1), section
@@ -105,7 +96,6 @@ class Config(configparser.SafeConfigParser):
         controller_sections = dict(self.sections("controller"))
         if not controller_sections:
             return ["--next-controller"]
-
         last_controller = max(map(lambda c: int(c[0]), controller_sections))
         args = []
         for i in range(1, last_controller + 1):
@@ -113,15 +103,11 @@ class Config(configparser.SafeConfigParser):
             if section:
                 for arg in self.section_to_args(section):
                     args.append(arg)
-
             args.append("--next-controller")
-
         return args
 
 
 class ControllerAction(argparse.Action):
-    # These options are moved from the normal options namespace to
-    # a controller specific namespace on --next-controller.
     __options__ = []
 
     @classmethod
@@ -131,13 +117,11 @@ class ControllerAction(argparse.Action):
         for option in cls.__options__:
             value = getattr(defaults, option)
             setattr(controller, option, value)
-
         return controller
 
     def __call__(self, parser, namespace, values, option_string=None):
         if not hasattr(namespace, "controllers"):
             setattr(namespace, "controllers", [])
-
         controller = argparse.Namespace()
         defaults = parser.parse_args([])
         for option in self.__options__:
@@ -149,23 +133,19 @@ class ControllerAction(argparse.Action):
                         value = parser._get_value(action, value)
             else:
                 value = getattr(defaults, option)
-
             setattr(controller, option, value)
-
         namespace.controllers.append(controller)
 
 controllopt.add_argument("--next-controller", nargs=0, action=ControllerAction,
                          help="Creates another controller")
 
+
 def hexcolor(color):
     color = color.strip("#")
-
     if len(color) != 6:
         raise ValueError
-
     values = (color[:2], color[2:4], color[4:6])
     values = map(lambda x: int(x, 16), values)
-
     return tuple(values)
 
 
@@ -183,28 +163,22 @@ def merge_options(src, dst, defaults):
     for key, value in src.__dict__.items():
         if key == "controllers":
             continue
-
         default = getattr(defaults, key)
-
         if getattr(dst, key) == default and value != default:
             setattr(dst, key, value)
 
 
 def load_options():
     options = parser.parse_args(sys.argv[1:] + ["--next-controller"])
-
     config = Config()
     config_paths = options.config and (options.config,) or CONFIG_FILES
     for path in filter(os.path.exists, map(os.path.expanduser, config_paths)):
         config.load(path)
         break
-
     config_args = config.section_to_args("ds4drv") + config.controllers()
     config_options = parser.parse_args(config_args)
-
     defaults, remaining_args = parser.parse_known_args(["--next-controller"])
     merge_options(config_options, options, defaults)
-
     controller_defaults = ControllerAction.default_controller()
     for idx, controller in enumerate(config_options.controllers):
         try:
@@ -212,35 +186,29 @@ def load_options():
             merge_options(controller, org_controller, controller_defaults)
         except IndexError:
             options.controllers.append(controller)
-
     options.profiles = {}
     for name, section in config.sections("profile"):
         args = config.section_to_args(section)
         profile_options = parser.parse_args(args)
         profile_options.parent = options
         options.profiles[name] = profile_options
-
     options.bindings = {}
     options.bindings["global"] = config.section("bindings",
                                                 key_type=parse_button_combo)
     for name, section in config.sections("bindings"):
         options.bindings[name] = config.section(section,
                                                 key_type=parse_button_combo)
-
     for name, section in config.sections("mapping"):
         mapping = config.section(section)
         for key, attr in mapping.items():
-            if '#' in attr: # Remove tailing comments on the line
+            if '#' in attr:
                 attr = attr.split('#', 1)[0].rstrip()
                 mapping[key] = attr
         parse_uinput_mapping(name, mapping)
-
     for controller in options.controllers:
         controller.parent = options
-
     options.default_controller = ControllerAction.default_controller()
     options.default_controller.parent = options
-
     return options
 
 
@@ -255,4 +223,3 @@ add_controller_option("--profiles", metavar="profiles",
                       help="Profiles to cycle through using the button "
                            "specified by --profile-toggle, e.g. "
                            "'profile1,profile2'")
-
